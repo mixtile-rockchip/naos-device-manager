@@ -1,4 +1,4 @@
-# NAOS Core
+# NAOS Device Manager
 
 [English](README.md) | **简体中文**
 
@@ -15,7 +15,7 @@ NAOS 设备管理服务与命令行工具。
 
 ## 二进制发布
 
-从 [Releases](https://github.com/mixtile-rockchip/naos-core/releases/latest) 下载 Linux ARM64 发布包。
+从 [Releases](https://github.com/mixtile-rockchip/naos-device-manager/releases/latest) 下载 Linux ARM64 发布包。
 
 归档包含：
 

@@ -1,4 +1,4 @@
-# NAOS Core
+# NAOS Device Manager
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -15,7 +15,7 @@ NAOS device management service and command-line interface for Linux.
 
 ## Binary releases
 
-Download the Linux ARM64 package from [Releases](https://github.com/mixtile-rockchip/naos-core/releases/latest).
+Download the Linux ARM64 package from [Releases](https://github.com/mixtile-rockchip/naos-device-manager/releases/latest).
 
 The archive includes:
 
