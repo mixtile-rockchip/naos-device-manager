@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-NAOS 设备管理服务与命令行工具。
+NAOS 设备管理服务与命令行工具。本分支提供 `naos-core` 的 Rust 实现。
 
 ## 功能
 
@@ -13,47 +13,36 @@ NAOS 设备管理服务与命令行工具。
 - OEM 身份读取、主机名和 mDNS 管理、硬件看门狗。
 - 设备重启与恢复出厂设置。
 
-## 二进制发布
+## 构建和测试
 
-从 [Releases](https://github.com/mixtile-rockchip/naos-device-manager/releases/latest) 下载 Linux ARM64 发布包。
-
-归档包含：
-
-| 路径 | 内容 |
-|---|---|
-| `usr/bin/naos-core` | 静态链接的 Core 程序 |
-| `etc/naos-core/device.ini` | Core 配置模板 |
-| `etc/naosd/config.yml` | 容器运行时配置 |
-| `etc/init.d/` | OpenRC 服务脚本 |
-| `usr/share/licenses/naos-core/` | Go 和依赖许可证 |
-| `build-info.json` | 目标、工具链、依赖与文件校验信息 |
-| `sbom.spdx.json` | SPDX 软件物料清单 |
-
-## 源码目录
-
-| 目录 | 内容 |
-|---|---|
-| `cmd/naos-core/` | CLI 和常驻服务入口 |
-| `internal/` | 设备管理、容器控制、OTA 和 API 实现 |
-| `config/` | 配置模板 |
-| `init.d/` | OpenRC 服务脚本 |
-| `tools/` | 发布包和 SBOM 生成工具 |
-
-## 构建
-
-需要 Go 1.23 或更新版本、Bash 和 Python 3。
+在 Linux 主机上使用稳定版 Rust 工具链运行以下命令。
 
 ```sh
-./build.sh
+cargo build --locked --release
+cargo test --locked
 ```
 
-指定 Go 程序路径：
+本机可执行文件位于 `target/release/naos-core`。测试使用临时配置和升级记录，并模拟 RAUC、hawkBit、naosd 和看门狗。集成测试会启动独立的 Core 进程并通过 Unix socket 调用服务。
+
+主机安装 `dbus-daemon` 后，可一并运行 RAUC D-Bus 测试。
 
 ```sh
-./build.sh /path/to/go
+cargo test --locked -- --include-ignored
 ```
 
-默认构建 Linux ARM64，输出为 `build/naos-core` 和 `output/naos-core-linux-arm64.tar.gz`。
+## 为 ARM64 Alpine 构建
+
+在 x86-64 Linux 主机上安装 AArch64 GNU 交叉编译器和 binutils 后，执行以下命令。
+
+```sh
+rustup target add aarch64-unknown-linux-musl
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc \
+AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar \
+cargo build --locked --release --target aarch64-unknown-linux-musl
+```
+
+静态可执行文件位于 `target/aarch64-unknown-linux-musl/release/naos-core`。
 
 ## 配置
 

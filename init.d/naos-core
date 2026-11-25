@@ -1,7 +1,5 @@
 #!/sbin/openrc-run
 description="NAOS Core local control service"
-# Apply the single-P setting before the Go runtime initializes.
-export GOMAXPROCS=1
 command="/usr/bin/naos-core"
 command_args="serve"
 supervisor=supervise-daemon

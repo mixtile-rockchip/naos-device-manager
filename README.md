@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-NAOS device management service and command-line interface for Linux.
+NAOS device management service and command-line interface for Linux. This branch contains the Rust implementation of `naos-core`.
 
 ## Features
 
@@ -13,47 +13,36 @@ NAOS device management service and command-line interface for Linux.
 - OEM identity, hostname and mDNS management, and hardware watchdog support.
 - Device reboot and factory reset.
 
-## Binary releases
+## Build and test
 
-Download the Linux ARM64 package from [Releases](https://github.com/mixtile-rockchip/naos-device-manager/releases/latest).
-
-The archive includes:
-
-| Path | Contents |
-|---|---|
-| `usr/bin/naos-core` | Static Core executable |
-| `etc/naos-core/device.ini` | Core configuration template |
-| `etc/naosd/config.yml` | Container runtime configuration |
-| `etc/init.d/` | OpenRC service scripts |
-| `usr/share/licenses/naos-core/` | Go and dependency licenses |
-| `build-info.json` | Target, toolchain, dependency and file checksums |
-| `sbom.spdx.json` | SPDX software bill of materials |
-
-## Source layout
-
-| Directory | Contents |
-|---|---|
-| `cmd/naos-core/` | CLI and service entry points |
-| `internal/` | Device management, container control, OTA and API implementations |
-| `config/` | Configuration templates |
-| `init.d/` | OpenRC service scripts |
-| `tools/` | Release packaging and SBOM generation |
-
-## Build
-
-Requires Go 1.23 or later, Bash, and Python 3.
+With a current stable Rust toolchain on Linux:
 
 ```sh
-./build.sh
+cargo build --locked --release
+cargo test --locked
 ```
 
-To select a Go executable:
+The native binary is `target/release/naos-core`. Tests use temporary INI files and journals, fake RAUC and hawkBit services, a simulated naosd socket, and a mock watchdog. The daemon integration test starts a separate Core process with a temporary Unix socket and hardware features disabled.
+
+Run the optional native RAUC D-Bus test with `dbus-daemon` installed and permission to bind a temporary Unix socket:
 
 ```sh
-./build.sh /path/to/go
+cargo test --locked -- --include-ignored
 ```
 
-The default target is Linux ARM64. Outputs are `build/naos-core` and `output/naos-core-linux-arm64.tar.gz`.
+## ARM64 Alpine build
+
+On an x86-64 Linux host with the AArch64 GNU cross compiler and binutils installed:
+
+```sh
+rustup target add aarch64-unknown-linux-musl
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc \
+AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar \
+cargo build --locked --release --target aarch64-unknown-linux-musl
+```
+
+The static binary is `target/aarch64-unknown-linux-musl/release/naos-core`.
 
 ## Configuration
 
