@@ -44,6 +44,10 @@ cargo build --locked --release --target aarch64-unknown-linux-musl
 
 The static binary is `target/aarch64-unknown-linux-musl/release/naos-core`.
 
+## Releases
+
+Push a version tag such as `YYYY.MM.DD.1` on the Rust branch to publish an ARM64 musl release. GitHub Actions runs the tests and publishes `naos-core-linux-arm64.tar.gz`, its SPDX 2.3 SBOM and `SHA256SUMS`. The archive includes the executable, OpenRC scripts, configuration templates, build information, license notices and a copy of the SBOM.
+
 ## Configuration
 
 Use [config/device.ini.example](config/device.ini.example) as `/etc/naos-core/device.ini`. Commands accept `--config PATH` to select another file.

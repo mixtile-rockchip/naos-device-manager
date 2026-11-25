@@ -44,6 +44,10 @@ cargo build --locked --release --target aarch64-unknown-linux-musl
 
 静态可执行文件位于 `target/aarch64-unknown-linux-musl/release/naos-core`。
 
+## 发布
+
+在 Rust 分支推送形如 `YYYY.MM.DD.1` 的版本标签后，GitHub Actions 会运行测试，并发布 ARM64 musl 安装包 `naos-core-linux-arm64.tar.gz`、SPDX 2.3 格式的 SBOM 和 `SHA256SUMS`。安装包内含可执行文件、OpenRC 脚本、配置模板、构建信息、许可证和一份 SBOM。
+
 ## 配置
 
 以 [config/device.ini.example](config/device.ini.example) 为模板配置 `/etc/naos-core/device.ini`。命令可使用 `--config PATH` 指定其他配置文件。
