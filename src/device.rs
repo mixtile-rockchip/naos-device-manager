@@ -89,17 +89,20 @@ impl Oem {
     }
 
     pub fn info(&self) -> OemInfo {
-        let sn = self
-            .serial
-            .iter()
-            .map(|&c| {
-                if (0x20..=0x7e).contains(&c) {
-                    char::from(c)
-                } else {
-                    '.'
-                }
-            })
-            .collect();
+        let sn = if self.serial == [0; 16] || self.serial == [0xff; 16] {
+            "XXXXXXXXXXXXXXXX".to_owned()
+        } else {
+            self.serial
+                .iter()
+                .map(|&c| {
+                    if (0x20..=0x7e).contains(&c) {
+                        char::from(c)
+                    } else {
+                        '.'
+                    }
+                })
+                .collect()
+        };
         let mac = self.mac.map(|byte| format!("{byte:02X}")).join(":");
         OemInfo { sn, mac }
     }
@@ -476,6 +479,7 @@ mod tests {
         data[..16].copy_from_slice(b"NAOS-00000000001");
         data[16..22].copy_from_slice(&[0, 1, 2, 0xaa, 0xbb, 0xff]);
         let otp = Oem::decode(&data[..]).unwrap();
+        assert_eq!(otp.info().sn, "NAOS-00000000001");
         assert_eq!(otp.info().mac, "00:01:02:AA:BB:FF");
         assert_eq!(hostname_serial(&otp.serial).unwrap(), "NAOS-00000000001");
         assert!(Oem::decode(&data[..23]).is_err());
@@ -483,6 +487,27 @@ mod tests {
         assert!(valid_serial(b"NAOS_00000000001"));
         assert!(hostname_serial(b"NAOS_00000000001").is_err());
         assert!(!valid_serial(b"0000000000000000"));
+    }
+
+    #[test]
+    fn oem_reports_unprogrammed_serials_as_sixteen_xs() {
+        let mac = [0, 1, 2, 0xaa, 0xbb, 0xff];
+        for serial in [[0; 16], [0xff; 16]] {
+            let info = Oem { serial, mac }.info();
+            assert_eq!(info.sn, "XXXXXXXXXXXXXXXX");
+            assert_eq!(info.mac, "00:01:02:AA:BB:FF");
+        }
+        let serial = *b"NAOS-0000000000\x00";
+        assert_eq!(Oem { serial, mac }.info().sn, "NAOS-0000000000.");
+        assert_eq!(
+            Oem {
+                serial: [b'0'; 16],
+                mac
+            }
+            .info()
+            .sn,
+            "0000000000000000"
+        );
     }
 
     #[test]
