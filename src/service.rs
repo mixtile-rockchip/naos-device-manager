@@ -149,17 +149,17 @@ pub fn run(mut config: Config, path: &Path) -> Result<()> {
     for warning in &config.warnings {
         eprintln!("naos-core: {warning}");
     }
-    let serial = match device::apply_hostname(&config.soc) {
-        Ok(serial) => serial,
+    let oem = match device::apply_hostname(&config.soc) {
+        Ok(oem) => Some(oem),
         Err(error) => {
             eprintln!("naos-core: OEM hostname: {error}");
-            String::new()
+            None
         }
     };
     let path = api::clean_absolute(&std::path::absolute(path)?);
     if config.hawkbit.enabled && config.hawkbit.controller_id.is_empty() {
         config.hawkbit.controller_id =
-            config::ensure_controller_id(&path, || device::controller_id(&config.soc, &serial))
+            config::ensure_controller_id(&path, || device::controller_id(&config.soc, oem))
                 .context("hawkBit identity")?;
     }
 

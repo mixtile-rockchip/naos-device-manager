@@ -58,6 +58,17 @@ cargo build --locked --release --target aarch64-unknown-linux-musl
 
 ## 系统信息 API
 
+`GET /v1/oem` 和 `naos-core oem` 根据 `device.ini` 中的 `[platform] soc` 读取设备 SN。
+
+| 平台 | SN 来源 |
+| --- | --- |
+| `rk3568` | 读取 `/proc/device-tree/serial-number` 中的 16 位 CPU 序列号。 |
+| `rk3588` | 优先读取烧录的 OEM SN，缺失时从同一设备树属性读取 CPU 序列号。 |
+
+使用 CPU 序列号时，主机名也使用该值。没有有效序列号时，SN 和主机名均为 `XXXXXXXXXXXXXXXX`。RK3568 的 `mac` 字段暂为空字符串。
+
+新生成的 OTA 设备 ID 用 `SN--` 加 OEM SN，或 `CPU-` 加 CPU 序列号。两者都缺失时，Core 生成以 `NN` 开头的随机设备 ID。
+
 `GET /v1/system` 从 `/usr/lib/naos/version.json` 读取当前固件信息，无需启用 OTA 或连接 OTA 服务器。
 
 在设备本机，通过 HTTP 或 Unix socket 调用：

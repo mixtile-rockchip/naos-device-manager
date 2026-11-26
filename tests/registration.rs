@@ -187,7 +187,10 @@ fn exercise(scenario: Scenario) {
                 .is_some_and(|id| id.len() == 18 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
                 || identity
                     .strip_prefix("SN--")
-                    .is_some_and(|id| id.len() == 16),
+                    .is_some_and(|id| id.len() == 16)
+                || identity
+                    .strip_prefix("CPU-")
+                    .is_some_and(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())),
             "DDI did not use a generated identity"
         );
         if rejected {

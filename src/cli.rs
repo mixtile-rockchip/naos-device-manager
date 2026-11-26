@@ -1,6 +1,6 @@
 use crate::api::clean_absolute;
 use crate::config::{self, Config, HawkbitConfig};
-use crate::device::{self, OemError, OemInfo};
+use crate::device::{self, OemInfo};
 use crate::hawkbit::{self, CheckResult, RegisterResult};
 use crate::server::{UnixClient, read_response, socket_unavailable};
 use anyhow::{Result, ensure};
@@ -159,9 +159,7 @@ pub fn run(args: &[OsString], out: &mut dyn Write, stderr: &mut dyn Write) -> u8
         "serve" => crate::service::run(cfg, Path::new(&options.config)),
         "oem" => match OemInfo::read(&cfg.soc) {
             Ok(oem) => writeln!(out, "SN: {}\nMAC: {}", oem.sn, oem.mac).map_err(Into::into),
-            Err(OemError::Unsupported) => Err(anyhow::anyhow!(
-                "OEM is not supported; requires [platform] soc=rk3588"
-            )),
+            Err(error) => Err(error.into()),
         },
         "boot-check" => {
             if cfg
@@ -196,7 +194,7 @@ pub fn run(args: &[OsString], out: &mut dyn Write, stderr: &mut dyn Write) -> u8
 
 fn check(mut cfg: Config, path: &str, out: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
     let result = if cfg.hawkbit.controller_id.is_empty() {
-        match config::ensure_controller_id(path, || device::controller_id(&cfg.soc, "")) {
+        match config::ensure_controller_id(path, || device::controller_id(&cfg.soc, None)) {
             Ok(id) => {
                 cfg.hawkbit.controller_id = id;
                 hawkbit::check(&cfg.hawkbit)
@@ -402,7 +400,7 @@ fn help(topic: &str, out: &mut dyn Write) -> std::io::Result<()> {
             "",
         ),
         "oem" => (
-            "Read the device SN and MAC from supported OEM OTP",
+            "Read the RK3568 or RK3588 serial number and available OEM MAC address",
             "",
             "",
             "",

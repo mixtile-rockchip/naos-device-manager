@@ -58,6 +58,17 @@ To start a configured application at boot, set `[container] enabled=true` and `m
 
 ## System information API
 
+`GET /v1/oem` and `naos-core oem` use the SoC selected by `[platform] soc` in `device.ini`.
+
+| SoC | Serial number source |
+| --- | --- |
+| `rk3568` | The 16-digit CPU serial from `/proc/device-tree/serial-number`. |
+| `rk3588` | The programmed OEM serial, falling back to the CPU serial from the same device-tree property. |
+
+The CPU serial is also used as the hostname when selected. If no valid serial is available, the reported serial and hostname are `XXXXXXXXXXXXXXXX`. On RK3568 the `mac` field is empty.
+
+A new OTA device ID uses `SN--` followed by the OEM serial or `CPU-` followed by the CPU serial. If neither is available, Core generates a random device ID starting with `NN`.
+
 `GET /v1/system` reads the current firmware information from `/usr/lib/naos/version.json`. It does not require OTA to be enabled or an OTA server connection.
 
 On the device, use either local HTTP or the Unix socket:

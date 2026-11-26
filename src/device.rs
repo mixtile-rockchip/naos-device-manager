@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 pub const VERSION_FILE: &str = "/usr/lib/naos/version.json";
 const OEM_OTP: &str = "/sys/bus/nvmem/devices/rockchip-secure-otp0/nvmem";
+const CPU_SERIAL: &str = "/proc/device-tree/serial-number";
 const MISSING_SN: &str = "XXXXXXXXXXXXXXXX";
 const MAX_METADATA: u64 = 64 * 1024;
 const MISC: &str = "/dev/naos/misc";
@@ -53,7 +54,7 @@ pub fn system_info(path: &Path) -> Result<SystemInfo> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum OemError {
-    #[error("OEM requires platform.soc=rk3588")]
+    #[error("OEM requires platform.soc=rk3588 or rk3568")]
     Unsupported,
 }
 
@@ -61,14 +62,32 @@ pub enum OemError {
 pub struct OemInfo {
     pub sn: String,
     pub mac: String,
+    #[serde(skip)]
+    cpu_derived: bool,
 }
 
 impl OemInfo {
     pub fn read(soc: &str) -> Result<Self, OemError> {
-        if soc != "rk3588" {
-            return Err(OemError::Unsupported);
+        Self::read_from(soc, Path::new(OEM_OTP), Path::new(CPU_SERIAL))
+    }
+
+    fn read_from(soc: &str, otp_path: &Path, cpu_path: &Path) -> Result<Self, OemError> {
+        let mut info = match soc {
+            "rk3588" => Self::from_otp(File::open(otp_path)),
+            "rk3568" => Self {
+                sn: MISSING_SN.to_owned(),
+                mac: String::new(),
+                cpu_derived: false,
+            },
+            _ => return Err(OemError::Unsupported),
+        };
+        if info.sn == MISSING_SN
+            && let Some(serial) = cpu_serial(cpu_path)
+        {
+            info.sn = serial;
+            info.cpu_derived = true;
         }
-        Ok(Self::from_otp(File::open(OEM_OTP)))
+        Ok(info)
     }
 
     fn from_otp(input: io::Result<impl Read>) -> Self {
@@ -93,7 +112,16 @@ impl OemInfo {
             .filter(|sn| !matches!(*sn, "0000000000000000" | "................"))
             .unwrap_or(MISSING_SN)
             .to_owned();
-        Self { sn, mac }
+        Self {
+            sn,
+            mac,
+            cpu_derived: false,
+        }
+    }
+
+    fn stable_controller_id(&self) -> Option<String> {
+        let prefix = if self.cpu_derived { "CPU-" } else { "SN--" };
+        usable_controller_serial(&self.sn).then(|| format!("{prefix}{}", self.sn))
     }
 
     fn hostname(&self) -> &str {
@@ -118,6 +146,24 @@ fn usable_controller_serial(serial: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
 }
 
+fn cpu_serial(path: &Path) -> Option<String> {
+    let mut value = String::new();
+    File::open(path)
+        .ok()?
+        .take(18)
+        .read_to_string(&mut value)
+        .ok()?;
+    let serial = value.strip_suffix('\0').unwrap_or(&value);
+    if serial.len() != 16
+        || !serial.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || serial == "0000000000000000"
+        || serial.eq_ignore_ascii_case("ffffffffffffffff")
+    {
+        return None;
+    }
+    Some(serial.to_owned())
+}
+
 pub fn hostname() -> io::Result<String> {
     let mut buffer = [0u8; 256];
     // Linux writes at most the length supplied and NUL-terminates a fitting hostname.
@@ -129,7 +175,7 @@ pub fn hostname() -> io::Result<String> {
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-pub fn apply_hostname(soc: &str) -> Result<String> {
+pub fn apply_hostname(soc: &str) -> Result<OemInfo> {
     let oem = OemInfo::read(soc)?;
     let name = oem.hostname();
     if hostname()? != name {
@@ -144,7 +190,7 @@ pub fn apply_hostname(soc: &str) -> Result<String> {
     if let Err(error) = persist_hostname(Path::new("/etc/hostname"), name) {
         eprintln!("naos-core: persist hostname: {error}");
     }
-    Ok(oem.sn)
+    Ok(oem)
 }
 
 fn persist_hostname(path: &Path, name: &str) -> io::Result<()> {
@@ -200,25 +246,29 @@ pub fn fresh_controller_id() -> Result<String> {
             .take(16385)
             .read_to_end(&mut data)
             .ok()?;
-        (data.len() <= 16384
-            && data
-                .split(|&b| b == 0)
-                .any(|item| item == b"rockchip,rk3588"))
-        .then_some("rk3588")
+        if data.len() > 16384 {
+            return None;
+        }
+        rockchip_soc(&data)
     })
     .unwrap_or_default();
-    controller_id(soc, "")
+    controller_id(soc, None)
 }
 
-pub fn controller_id(soc: &str, known_serial: &str) -> Result<String> {
-    if usable_controller_serial(known_serial) {
-        return Ok(format!("SN--{known_serial}"));
-    }
-    if known_serial.is_empty()
-        && let Ok(oem) = OemInfo::read(soc)
-        && usable_controller_serial(&oem.sn)
+fn rockchip_soc(compatible: &[u8]) -> Option<&'static str> {
+    compatible.split(|&b| b == 0).find_map(|entry| match entry {
+        b"rockchip,rk3568" => Some("rk3568"),
+        b"rockchip,rk3588" => Some("rk3588"),
+        _ => None,
+    })
+}
+
+pub fn controller_id(soc: &str, known_oem: Option<OemInfo>) -> Result<String> {
+    if let Some(id) = known_oem
+        .or_else(|| OemInfo::read(soc).ok())
+        .and_then(|oem| oem.stable_controller_id())
     {
-        return Ok(format!("SN--{}", oem.sn));
+        return Ok(id);
     }
     random_controller_id(File::open("/dev/urandom")?)
 }
@@ -466,6 +516,32 @@ mod tests {
     }
 
     #[test]
+    fn cpu_serial_accepts_a_device_tree_string_and_preserves_leading_zeroes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serial-number");
+        assert!(cpu_serial(&path).is_none());
+        for (data, expected) in [
+            ("0123456789ABCDEF\0", "0123456789ABCDEF"),
+            ("0123456789abcdef", "0123456789abcdef"),
+        ] {
+            fs::write(&path, data).unwrap();
+            assert_eq!(cpu_serial(&path).as_deref(), Some(expected));
+        }
+        for data in [
+            "",
+            "0",
+            "0000000000000000\0",
+            "FFFFFFFFFFFFFFFF",
+            "0123456789abcdeZ",
+            "0123456789abcdef0",
+            "0123456789abcdef\0x",
+        ] {
+            fs::write(&path, data).unwrap();
+            assert!(cpu_serial(&path).is_none(), "{data:?}");
+        }
+    }
+
+    #[test]
     fn otp_serial_and_hostname_share_the_missing_value() {
         let mut data = [0; 24];
         data[16..22].copy_from_slice(&[0, 1, 2, 0xaa, 0xbb, 0xff]);
@@ -517,14 +593,80 @@ mod tests {
     }
 
     #[test]
-    fn controller_ids_use_real_serials_and_never_the_shared_placeholder() {
+    fn otp_then_cpu_supply_the_serial_hostname_and_controller_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let otp = dir.path().join("nvmem");
+        let cpu = dir.path().join("serial-number");
+        fs::write(&cpu, b"0123456789abcdef\0").unwrap();
+
+        // The two serials can even be identical. Only their source determines the ID prefix.
+        let mut data = *b"0123456789abcdef\x00\x01\x02\x03\x04\x05\x00\x00";
+        for (sn, prefix) in [(b"0123456789abcdef", "SN--"), (b"................", "CPU-")] {
+            data[..16].copy_from_slice(sn);
+            fs::write(&otp, data).unwrap();
+            let info = OemInfo::read_from("rk3588", &otp, &cpu).unwrap();
+            assert_eq!(info.hostname(), "0123456789abcdef");
+            assert_eq!(
+                serde_json::to_value(&info).unwrap(),
+                serde_json::json!({
+                    "sn": "0123456789abcdef", "mac": "00:01:02:03:04:05"
+                })
+            );
+            assert_eq!(
+                controller_id("rk3588", Some(info)).unwrap(),
+                format!("{prefix}0123456789abcdef")
+            );
+        }
+
+        fs::remove_file(&otp).unwrap();
+        let info = OemInfo::read_from("rk3588", &otp, &cpu).unwrap();
+        assert_eq!(info.sn, "0123456789abcdef");
+        assert!(info.mac.is_empty());
         assert_eq!(
-            controller_id("rk3588", "NAOS-00000000001").unwrap(),
-            "SN--NAOS-00000000001"
+            info.stable_controller_id().as_deref(),
+            Some("CPU-0123456789abcdef")
         );
-        let id = controller_id("rk3588", MISSING_SN).unwrap();
+
+        fs::remove_file(&cpu).unwrap();
+        let info = OemInfo::read_from("rk3588", &otp, &cpu).unwrap();
+        assert_eq!(info.sn, MISSING_SN);
+        assert_eq!(info.hostname(), MISSING_SN);
+        let id = controller_id("rk3588", Some(info)).unwrap();
         assert!(id.starts_with("NN"));
         assert_eq!(id.len(), 20);
+    }
+
+    #[test]
+    fn rk3568_uses_the_device_tree_even_with_a_populated_rk3588_otp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cpu = dir.path().join("serial-number");
+        let otp = dir.path().join("nvmem");
+        fs::write(&otp, b"NAOS-00000000001\x01\x02\x03\x04\x05\x06\x00\x00").unwrap();
+        fs::write(&cpu, b"0000ABCDEF123456\0").unwrap();
+        let info = OemInfo::read_from("rk3568", &otp, &cpu).unwrap();
+        assert_eq!(info.sn, "0000ABCDEF123456");
+        assert_eq!(info.hostname(), info.sn);
+        assert!(info.mac.is_empty());
+        assert_eq!(
+            controller_id("rk3568", Some(info)).unwrap(),
+            "CPU-0000ABCDEF123456"
+        );
+
+        fs::remove_file(&cpu).unwrap();
+        let info = OemInfo::read_from("rk3568", &otp, &cpu).unwrap();
+        assert_eq!(info.sn, "XXXXXXXXXXXXXXXX");
+        assert_eq!(info.hostname(), info.sn);
+        assert!(info.stable_controller_id().is_none());
+
+        assert_eq!(
+            rockchip_soc(b"vendor,board\0rockchip,rk3568\0"),
+            Some("rk3568")
+        );
+        assert_eq!(
+            rockchip_soc(b"vendor,board\0rockchip,rk3588\0"),
+            Some("rk3588")
+        );
+        assert_eq!(rockchip_soc(b"vendor,rk3568\0"), None);
     }
 
     #[test]
