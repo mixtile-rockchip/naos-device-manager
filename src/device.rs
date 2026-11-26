@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 pub const VERSION_FILE: &str = "/usr/lib/naos/version.json";
 const OEM_OTP: &str = "/sys/bus/nvmem/devices/rockchip-secure-otp0/nvmem";
+const MISSING_SN: &str = "XXXXXXXXXXXXXXXX";
 const MAX_METADATA: u64 = 64 * 1024;
 const MISC: &str = "/dev/naos/misc";
 const RECOVERY_OFFSET: u64 = 65536;
@@ -54,14 +55,6 @@ pub fn system_info(path: &Path) -> Result<SystemInfo> {
 pub enum OemError {
     #[error("OEM requires platform.soc=rk3588")]
     Unsupported,
-    #[error("{0}")]
-    Read(#[from] io::Error),
-}
-
-#[derive(Debug)]
-pub struct Oem {
-    serial: [u8; 16],
-    mac: [u8; 6],
 }
 
 #[derive(Debug, Serialize)]
@@ -70,61 +63,59 @@ pub struct OemInfo {
     pub mac: String,
 }
 
-impl Oem {
+impl OemInfo {
     pub fn read(soc: &str) -> Result<Self, OemError> {
         if soc != "rk3588" {
             return Err(OemError::Unsupported);
         }
-        Ok(Self::decode(File::open(OEM_OTP)?)?)
+        Ok(Self::from_otp(File::open(OEM_OTP)))
     }
 
-    fn decode(mut reader: impl Read) -> io::Result<Self> {
-        let mut aligned = [0; 24];
-        reader.read_exact(&mut aligned)?;
-        let mut serial = [0; 16];
-        let mut mac = [0; 6];
-        serial.copy_from_slice(&aligned[..16]);
-        mac.copy_from_slice(&aligned[16..22]);
-        Ok(Self { serial, mac })
+    fn from_otp(input: io::Result<impl Read>) -> Self {
+        // RK3588 NVMEM uses word-aligned reads: 16 bytes of SN, then 8 bytes containing the MAC.
+        let mut bytes = Vec::with_capacity(24);
+        if let Err(error) = input.and_then(|reader| reader.take(24).read_to_end(&mut bytes)) {
+            eprintln!("naos-core: read OEM OTP: {error}");
+        }
+        let mac = bytes
+            .get(16..22)
+            .map(|mac| {
+                mac.iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(":")
+            })
+            .unwrap_or_default();
+        let sn = bytes
+            .get(..16)
+            .and_then(|serial| std::str::from_utf8(serial).ok())
+            .filter(|sn| sn.bytes().all(|b| (0x20..=0x7e).contains(&b)) && !sn.trim().is_empty())
+            .filter(|sn| !matches!(*sn, "0000000000000000" | "................"))
+            .unwrap_or(MISSING_SN)
+            .to_owned();
+        Self { sn, mac }
     }
 
-    pub fn info(&self) -> OemInfo {
-        let sn = if self.serial == [0; 16] || self.serial == [0xff; 16] {
-            "XXXXXXXXXXXXXXXX".to_owned()
+    fn hostname(&self) -> &str {
+        if self
+            .sn
+            .bytes()
+            .enumerate()
+            .all(|(i, byte)| byte.is_ascii_alphanumeric() || (byte == b'-' && (1..15).contains(&i)))
+        {
+            &self.sn
         } else {
-            self.serial
-                .iter()
-                .map(|&c| {
-                    if (0x20..=0x7e).contains(&c) {
-                        char::from(c)
-                    } else {
-                        '.'
-                    }
-                })
-                .collect()
-        };
-        let mac = self.mac.map(|byte| format!("{byte:02X}")).join(":");
-        OemInfo { sn, mac }
+            MISSING_SN
+        }
     }
 }
 
-fn valid_serial(serial: &[u8]) -> bool {
+fn usable_controller_serial(serial: &str) -> bool {
     serial.len() == 16
-        && serial != b"0000000000000000"
+        && serial != MISSING_SN
         && serial
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(byte))
-}
-
-fn hostname_serial(serial: &[u8; 16]) -> Result<&str> {
-    ensure!(serial != b"0000000000000000", "OTP SN is all zero");
-    ensure!(
-        serial.iter().enumerate().all(
-            |(i, byte)| byte.is_ascii_alphanumeric() || (*byte == b'-' && (1..15).contains(&i))
-        ),
-        "OTP SN is not a valid hostname"
-    );
-    Ok(std::str::from_utf8(serial)?)
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
 }
 
 pub fn hostname() -> io::Result<String> {
@@ -139,8 +130,8 @@ pub fn hostname() -> io::Result<String> {
 }
 
 pub fn apply_hostname(soc: &str) -> Result<String> {
-    let oem = Oem::read(soc)?;
-    let name = hostname_serial(&oem.serial)?;
+    let oem = OemInfo::read(soc)?;
+    let name = oem.hostname();
     if hostname()? != name {
         // The validated ASCII name lives for the call. sethostname takes its exact length.
         if unsafe { libc::sethostname(name.as_ptr().cast(), name.len()) } != 0 {
@@ -153,7 +144,7 @@ pub fn apply_hostname(soc: &str) -> Result<String> {
     if let Err(error) = persist_hostname(Path::new("/etc/hostname"), name) {
         eprintln!("naos-core: persist hostname: {error}");
     }
-    Ok(name.to_owned())
+    Ok(oem.sn)
 }
 
 fn persist_hostname(path: &Path, name: &str) -> io::Result<()> {
@@ -220,13 +211,14 @@ pub fn fresh_controller_id() -> Result<String> {
 }
 
 pub fn controller_id(soc: &str, known_serial: &str) -> Result<String> {
-    if valid_serial(known_serial.as_bytes()) {
+    if usable_controller_serial(known_serial) {
         return Ok(format!("SN--{known_serial}"));
     }
-    if let Ok(oem) = Oem::read(soc)
-        && valid_serial(&oem.serial)
+    if known_serial.is_empty()
+        && let Ok(oem) = OemInfo::read(soc)
+        && usable_controller_serial(&oem.sn)
     {
-        return Ok(format!("SN--{}", std::str::from_utf8(&oem.serial)?));
+        return Ok(format!("SN--{}", oem.sn));
     }
     random_controller_id(File::open("/dev/urandom")?)
 }
@@ -474,40 +466,65 @@ mod tests {
     }
 
     #[test]
-    fn otp_layout_and_serial_rules_match_device_contract() {
+    fn otp_serial_and_hostname_share_the_missing_value() {
         let mut data = [0; 24];
-        data[..16].copy_from_slice(b"NAOS-00000000001");
         data[16..22].copy_from_slice(&[0, 1, 2, 0xaa, 0xbb, 0xff]);
-        let otp = Oem::decode(&data[..]).unwrap();
-        assert_eq!(otp.info().sn, "NAOS-00000000001");
-        assert_eq!(otp.info().mac, "00:01:02:AA:BB:FF");
-        assert_eq!(hostname_serial(&otp.serial).unwrap(), "NAOS-00000000001");
-        assert!(Oem::decode(&data[..23]).is_err());
-        assert!(matches!(Oem::read("qcs9075"), Err(OemError::Unsupported)));
-        assert!(valid_serial(b"NAOS_00000000001"));
-        assert!(hostname_serial(b"NAOS_00000000001").is_err());
-        assert!(!valid_serial(b"0000000000000000"));
+        for serial in [
+            [0; 16],
+            [0xff; 16],
+            [b'0'; 16],
+            [b'.'; 16],
+            [b' '; 16],
+            *b"NAOS-0000000000\x00",
+        ] {
+            data[..16].copy_from_slice(&serial);
+            let info = OemInfo::from_otp(Ok(&data[..]));
+            assert_eq!(info.sn, "XXXXXXXXXXXXXXXX");
+            assert_eq!(info.hostname(), info.sn);
+            assert_eq!(info.mac, "00:01:02:AA:BB:FF");
+        }
+        data[..16].copy_from_slice(b"NAOS-00000000001");
+        let info = OemInfo::from_otp(Ok(&data[..]));
+        assert_eq!(info.sn, "NAOS-00000000001");
+        assert_eq!(info.hostname(), info.sn);
+        data[4] = b'_';
+        let info = OemInfo::from_otp(Ok(&data[..]));
+        assert_eq!(info.sn, "NAOS_00000000001");
+        assert_eq!(info.hostname(), MISSING_SN);
+        assert!(usable_controller_serial(&info.sn));
+        assert!(matches!(
+            OemInfo::read("qcs9075"),
+            Err(OemError::Unsupported)
+        ));
     }
 
     #[test]
-    fn oem_reports_unprogrammed_serials_as_sixteen_xs() {
-        let mac = [0, 1, 2, 0xaa, 0xbb, 0xff];
-        for serial in [[0; 16], [0xff; 16]] {
-            let info = Oem { serial, mac }.info();
-            assert_eq!(info.sn, "XXXXXXXXXXXXXXXX");
-            assert_eq!(info.mac, "00:01:02:AA:BB:FF");
+    fn unreadable_or_short_otp_only_defaults_missing_fields() {
+        let serial = b"NAOS-00000000001";
+        for input in [
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            Ok(&serial[..15]),
+        ] {
+            let info = OemInfo::from_otp(input);
+            assert_eq!(info.sn, MISSING_SN);
+            assert_eq!(info.hostname(), MISSING_SN);
+            assert!(info.mac.is_empty());
         }
-        let serial = *b"NAOS-0000000000\x00";
-        assert_eq!(Oem { serial, mac }.info().sn, "NAOS-0000000000.");
+        let info = OemInfo::from_otp(Ok(&serial[..]));
+        assert_eq!(info.hostname(), "NAOS-00000000001");
+        assert_eq!(info.hostname(), info.sn);
+        assert!(info.mac.is_empty());
+    }
+
+    #[test]
+    fn controller_ids_use_real_serials_and_never_the_shared_placeholder() {
         assert_eq!(
-            Oem {
-                serial: [b'0'; 16],
-                mac
-            }
-            .info()
-            .sn,
-            "0000000000000000"
+            controller_id("rk3588", "NAOS-00000000001").unwrap(),
+            "SN--NAOS-00000000001"
         );
+        let id = controller_id("rk3588", MISSING_SN).unwrap();
+        assert!(id.starts_with("NN"));
+        assert_eq!(id.len(), 20);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::api::{self, Backend, Reload};
 use crate::config::{self, Config};
 use crate::container;
-use crate::device::{self, Oem, OemError, OemInfo, RecoveryError, SystemInfo};
+use crate::device::{self, OemError, OemInfo, RecoveryError, SystemInfo};
 use crate::hawkbit;
 use crate::mdns;
 use crate::operation::{Gate, Lease};
@@ -31,7 +31,7 @@ impl Backend for DeviceBackend {
     }
 
     fn oem(&self) -> Result<OemInfo, OemError> {
-        Oem::read(&self.soc).map(|otp| otp.info())
+        OemInfo::read(&self.soc)
     }
 
     fn containers(&self) -> Result<Vec<container::State>, container::Error> {

@@ -201,7 +201,6 @@ async fn oem(State(api): State<Api>) -> Response {
             "OEM_UNSUPPORTED",
             OemError::Unsupported,
         ),
-        Err(error) => unavailable("OEM_READ_FAILED", error),
     })
     .await
 }

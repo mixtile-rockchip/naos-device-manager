@@ -1,6 +1,6 @@
 use crate::api::clean_absolute;
 use crate::config::{self, Config, HawkbitConfig};
-use crate::device::{self, Oem, OemError};
+use crate::device::{self, OemError, OemInfo};
 use crate::hawkbit::{self, CheckResult, RegisterResult};
 use crate::server::{UnixClient, read_response, socket_unavailable};
 use anyhow::{Result, ensure};
@@ -157,15 +157,11 @@ pub fn run(args: &[OsString], out: &mut dyn Write, stderr: &mut dyn Write) -> u8
     };
     let outcome = match options.command.as_str() {
         "serve" => crate::service::run(cfg, Path::new(&options.config)),
-        "oem" => match Oem::read(&cfg.soc) {
-            Ok(otp) => {
-                let oem = otp.info();
-                writeln!(out, "SN: {}\nMAC: {}", oem.sn, oem.mac).map_err(Into::into)
-            }
+        "oem" => match OemInfo::read(&cfg.soc) {
+            Ok(oem) => writeln!(out, "SN: {}\nMAC: {}", oem.sn, oem.mac).map_err(Into::into),
             Err(OemError::Unsupported) => Err(anyhow::anyhow!(
                 "OEM is not supported; requires [platform] soc=rk3588"
             )),
-            Err(error) => Err(anyhow::anyhow!("read OEM OTP: {error}")),
         },
         "boot-check" => {
             if cfg
